@@ -1,0 +1,25 @@
+# 忽略 Python 缓存
+__pycache__/
+*.pyc
+
+# 忽略密钥
+config.py
+.env
+*.key
+
+# 忽略运行产物（音频、日志、缓存）
+*.wav
+*.log
+应声库/
+回复.wav
+录音.wav
+一直听着_这段.wav
+
+# 工作区（Claude 的草稿目录）——只留说明文件
+工作区/*
+!工作区/CLAUDE.md
+
+# 编辑器
+.vscode/
+.idea/
+.DS_Store

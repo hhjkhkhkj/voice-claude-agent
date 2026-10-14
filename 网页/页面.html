@@ -1,0 +1,254 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<title>语音客服</title>
+<style>
+  :root {
+    --主色: #2b6cb0;
+    --红: #c53030;
+    --灰: #718096;
+  }
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0;
+    min-height: 100%;
+    background: #f7fafc;
+    color: #1a202c;
+    font-family: -apple-system, "Segoe UI", "Microsoft YaHei", sans-serif;
+    -webkit-text-size-adjust: 100%;
+  }
+  body {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    padding: 24px 16px calc(24px + env(safe-area-inset-bottom));
+  }
+
+  h1 { font-size: 20px; margin: 4px 0 2px; font-weight: 600; }
+  .副 { font-size: 13px; color: var(--灰); margin-bottom: 18px; }
+
+  .选 {
+    margin-bottom: 22px;
+    font-size: 14px;
+    color: var(--灰);
+  }
+  select {
+    font-size: 16px;
+    padding: 8px 12px;
+    margin-left: 6px;
+    border: 1px solid #cbd5e0;
+    border-radius: 8px;
+    background: #fff;
+    color: #1a202c;
+  }
+
+  /* 按住说话的按钮 */
+  #说话 {
+    width: 190px;
+    height: 190px;
+    border-radius: 50%;
+    border: none;
+    background: var(--主色);
+    color: #fff;
+    font-size: 19px;
+    font-weight: 500;
+    cursor: pointer;
+    user-select: none;
+    -webkit-user-select: none;
+    -webkit-tap-highlight-color: transparent;
+    touch-action: none;            /* 手机上按住时不要被滚动抢走 */
+    box-shadow: 0 10px 28px rgba(43, 108, 176, .28);
+    transition: transform .12s ease, background .12s ease, box-shadow .12s ease;
+  }
+  #说话.录 {
+    background: var(--红);
+    transform: scale(.94);
+    box-shadow: 0 6px 18px rgba(197, 48, 48, .35);
+  }
+  #说话:disabled {
+    background: #a0aec0;
+    box-shadow: none;
+    cursor: not-allowed;
+  }
+
+  #状态 {
+    height: 22px;
+    margin-top: 16px;
+    font-size: 14px;
+    color: var(--灰);
+  }
+
+  #记录 { width: 100%; max-width: 560px; margin-top: 26px; }
+
+  .轮 {
+    background: #fff;
+    border-radius: 12px;
+    padding: 13px 16px;
+    margin-bottom: 10px;
+    box-shadow: 0 1px 3px rgba(0, 0, 0, .07);
+  }
+  .轮 .谁 { font-size: 12px; color: var(--灰); margin-bottom: 5px; }
+  .轮 .话 { font-size: 16px; line-height: 1.65; white-space: pre-wrap; word-break: break-word; }
+  .轮.我 .谁 { color: var(--主色); font-weight: 600; }
+</style>
+</head>
+<body>
+
+  <h1 id="标题">语音客服</h1>
+  <div class="副">按住下面的话筒说话，松开它就会回答你</div>
+
+  <div class="选">
+    租户
+    <select id="租户"></select>
+  </div>
+
+  <button id="说话">按住说话</button>
+  <div id="状态"></div>
+
+  <div id="记录"></div>
+
+<script>
+const 按钮 = document.getElementById('说话');
+const 状态栏 = document.getElementById('状态');
+const 记录 = document.getElementById('记录');
+const 租户框 = document.getElementById('租户');
+const 标题 = document.getElementById('标题');
+
+let 录音器 = null;
+let 数据块们 = [];
+let 正在录 = false;
+
+// —————— 启动时拉租户列表 ——————
+fetch('/租户列表')
+  .then(r => r.json())
+  .then(数据 => {
+    租户框.innerHTML = '';
+    (数据.租户 || []).forEach(名 => {
+      const 项 = document.createElement('option');
+      项.value = 名;
+      项.textContent = 名;
+      租户框.appendChild(项);
+    });
+    标题.textContent = 租户框.value + ' · 语音客服';
+  })
+  .catch(() => {
+    租户框.innerHTML = '<option>诊所</option>';
+  });
+
+租户框.addEventListener('change', () => {
+  标题.textContent = 租户框.value + ' · 语音客服';
+});
+
+// —————— 按住说话 ——————
+按钮.addEventListener('pointerdown', 开始录);
+按钮.addEventListener('pointerup', 结束录);
+按钮.addEventListener('pointercancel', 结束录);
+按钮.addEventListener('pointerleave', () => { if (正在录) 结束录(); });
+// 防止手机上长按弹出菜单
+按钮.addEventListener('contextmenu', e => e.preventDefault());
+
+async function 开始录(事件) {
+  事件.preventDefault();
+  if (正在录) return;
+  正在录 = true;
+  按钮.classList.add('录');
+  按钮.textContent = '松开就发送';
+  状态栏.textContent = '正在听……';
+
+  try {
+    const 流 = await navigator.mediaDevices.getUserMedia({ audio: true });
+    数据块们 = [];
+    录音器 = new MediaRecorder(流);
+
+    录音器.ondataavailable = e => { if (e.data && e.data.size) 数据块们.push(e.data); };
+
+    录音器.onstop = async () => {
+      流.getTracks().forEach(t => t.stop());
+      const 整段 = new Blob(数据块们, { type: 录音器.mimeType || 'audio/webm' });
+      await 发送(整段);
+    };
+
+    录音器.start();
+  } catch (e) {
+    状态栏.textContent = '拿不到麦克风：' + e.message;
+    收尾按钮();
+  }
+}
+
+function 结束录(事件) {
+  if (!正在录) return;
+  事件.preventDefault();
+  正在录 = false;
+  按钮.textContent = '识别中……';
+  状态栏.textContent = '识别中……';
+  if (录音器 && 录音器.state === 'recording') {
+    录音器.stop();          // onstop 里会接着发出去
+  } else {
+    收尾按钮();
+  }
+}
+
+function 收尾按钮() {
+  正在录 = false;
+  按钮.classList.remove('录');
+  按钮.textContent = '按住说话';
+}
+
+async function 发送(音频块) {
+  const 表单 = new FormData();
+  表单.append('音频', 音频块, '声音.webm');
+
+  try {
+    const 响应 = await fetch('/对话?租户=' + encodeURIComponent(租户框.value), {
+      method: 'POST',
+      body: 表单,
+    });
+    const 结果 = await 响应.json();
+
+    if (结果.错误) {
+      状态栏.textContent = 结果.错误;
+      收尾按钮();
+      return;
+    }
+
+    加一轮('我', 结果.问题);
+    加一轮(租户框.value, 结果.回复);
+
+    状态栏.textContent = '播放中……';
+    收尾按钮();
+
+    // base64 → 二进制 → 播放
+    const 原始 = atob(结果.音频);
+    const 字节 = new Uint8Array(原始.length);
+    for (let i = 0; i < 原始.length; i++) 字节[i] = 原始.charCodeAt(i);
+    const 音频 = new Audio(URL.createObjectURL(new Blob([字节], { type: 'audio/wav' })));
+    音频.onended = () => { 状态栏.textContent = ''; };
+    音频.onerror = () => { 状态栏.textContent = '音频播放失败'; };
+    await 音频.play();
+  } catch (e) {
+    状态栏.textContent = '出错了：' + e.message;
+    收尾按钮();
+  }
+}
+
+function 加一轮(谁, 话) {
+  const 块 = document.createElement('div');
+  块.className = '轮' + (谁 === '我' ? ' 我' : '');
+
+  const 头 = document.createElement('div');
+  头.className = '谁';
+  头.textContent = 谁;
+
+  const 身 = document.createElement('div');
+  身.className = '话';
+  身.textContent = 话;          // 用 textContent，不解析 HTML
+
+  块.appendChild(头);
+  块.appendChild(身);
+  记录.prepend(块);
+}
+</script>
+</body>
+</html>

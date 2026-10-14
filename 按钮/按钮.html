@@ -1,0 +1,163 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<title>语音开关</title>
+<style>
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0; min-height: 100%;
+    background: #f7fafc; color: #1a202c;
+    font-family: -apple-system, "Segoe UI", "Microsoft YaHei", sans-serif;
+    -webkit-text-size-adjust: 100%;
+  }
+  body {
+    display: flex; flex-direction: column; align-items: center;
+    padding: 28px 16px calc(28px + env(safe-area-inset-bottom));
+  }
+  h1 { font-size: 19px; margin: 4px 0 2px; font-weight: 600; }
+  .副 { font-size: 13px; color: #718096; margin-bottom: 26px; }
+
+  #按钮 {
+    width: 200px; height: 200px; border-radius: 50%;
+    border: none; background: #2b6cb0; color: #fff;
+    font-size: 20px; font-weight: 500;
+    cursor: pointer; user-select: none; -webkit-user-select: none;
+    -webkit-tap-highlight-color: transparent;
+    touch-action: none;                 /* 手机上按住时别被滚动抢走 */
+    box-shadow: 0 10px 28px rgba(43,108,176,.28);
+    transition: transform .12s ease, background .12s ease, box-shadow .12s ease;
+  }
+  #按钮.录 {
+    background: #c53030; transform: scale(.94);
+    box-shadow: 0 6px 18px rgba(197,48,48,.35);
+  }
+  #按钮:disabled { background: #a0aec0; box-shadow: none; cursor: not-allowed; }
+
+  #状态 { height: 22px; margin-top: 18px; font-size: 14px; color: #718096; }
+
+  #结果 {
+    width: 100%; max-width: 560px; margin-top: 26px;
+    background: #fff; border-radius: 12px; padding: 16px 18px;
+    box-shadow: 0 1px 3px rgba(0,0,0,.07);
+    min-height: 78px;
+  }
+  #结果 .标签 { font-size: 12px; color: #718096; margin-bottom: 6px; }
+  #结果 .字 { font-size: 18px; line-height: 1.7; white-space: pre-wrap; word-break: break-word; }
+  #结果 .空 { color: #a0aec0; font-size: 15px; }
+
+  .提示 { margin-top: 18px; font-size: 13px; color: #718096; text-align: center; line-height: 1.7; }
+</style>
+</head>
+<body>
+
+  <h1>语音开关</h1>
+  <div class="副">按住按钮（或按住空格键）说话，松开就出文字</div>
+
+  <button id="按钮">按住说话</button>
+  <div id="状态"></div>
+
+  <div id="结果">
+    <div class="标签">刚识别到的</div>
+    <div class="字 空" id="字">还没有</div>
+  </div>
+
+  <div class="提示">
+    说完之后，agent 会<b>自动</b>看到这段文字<br>
+    （监视器盯着这个文件，一变就通知它）
+  </div>
+
+<script>
+const 按钮 = document.getElementById('按钮');
+const 状态栏 = document.getElementById('状态');
+const 字 = document.getElementById('字');
+
+let 录音器 = null;
+let 块们 = [];
+let 正在录 = false;
+
+按钮.addEventListener('pointerdown', 开始);
+按钮.addEventListener('pointerup', 结束);
+按钮.addEventListener('pointercancel', 结束);
+按钮.addEventListener('pointerleave', () => { if (正在录) 结束(); });
+按钮.addEventListener('contextmenu', e => e.preventDefault());   // 手机上别弹菜单
+
+// —————— 键盘：按住空格 = 按住说话 ——————
+// 比用鼠标点那个圆钮快，手不用离开键盘。
+document.addEventListener('keydown', e => {
+  if (e.code === 'Space' && !e.repeat) { 开始(e); }
+});
+document.addEventListener('keyup', e => {
+  if (e.code === 'Space') { 结束(e); }
+});
+
+async function 开始(e) {
+  e.preventDefault();
+  if (正在录) return;
+  正在录 = true;
+  按钮.classList.add('录');
+  按钮.textContent = '松开就发送';
+  状态栏.textContent = '正在听……';
+
+  try {
+    const 流 = await navigator.mediaDevices.getUserMedia({ audio: true });
+    块们 = [];
+    录音器 = new MediaRecorder(流);
+    录音器.ondataavailable = ev => { if (ev.data && ev.data.size) 块们.push(ev.data); };
+    录音器.onstop = async () => {
+      流.getTracks().forEach(t => t.stop());
+      const 整段 = new Blob(块们, { type: 录音器.mimeType || 'audio/webm' });
+      await 发送(整段);
+    };
+    录音器.start();
+  } catch (err) {
+    状态栏.textContent = '拿不到麦克风：' + err.message;
+    收尾();
+  }
+}
+
+function 结束(e) {
+  if (!正在录) return;
+  e.preventDefault();
+  正在录 = false;
+  按钮.textContent = '识别中……';
+  状态栏.textContent = '识别中……';
+  if (录音器 && 录音器.state === 'recording') 录音器.stop();
+  else 收尾();
+}
+
+function 收尾() {
+  正在录 = false;
+  按钮.classList.remove('录');
+  按钮.textContent = '按住说话';
+}
+
+async function 发送(音频块) {
+  const 表单 = new FormData();
+  表单.append('音频', 音频块, '声音.webm');
+  try {
+    const 响应 = await fetch('/听', { method: 'POST', body: 表单 });
+    const 结果 = await 响应.json();
+    收尾();
+
+    if (结果.错误) { 状态栏.textContent = 结果.错误; return; }
+
+    const 文字 = (结果.文字 || '').trim();
+    if (文字) {
+      字.textContent = 文字;
+      字.classList.remove('空');
+      状态栏.textContent = '好了，跟 agent 说「我说完了」';
+    } else {
+      字.textContent = '（没听清，再说一次）';
+      字.classList.add('空');
+      状态栏.textContent = '没听清';
+    }
+  } catch (err) {
+    收尾();
+    状态栏.textContent = '出错了：' + err.message;
+  }
+}
+</script>
+</body>
+</html>
